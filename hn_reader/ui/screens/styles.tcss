@@ -1,0 +1,24 @@
+Tabs {
+    width: 50%;
+}
+
+Tab {
+    width: 1fr;
+}
+
+#table-widget {
+    width: 50%;
+    height: 80%;
+}
+
+Markdown {
+    min-height: 50%;
+    border: white;
+    border-title-align: left; 
+}
+
+# Markdown MarkdownParagraph {
+#     text-wrap: nowrap;
+#     text-overflow: ellipsis;
+#     overflow: hidden;
+# }

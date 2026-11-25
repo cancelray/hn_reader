@@ -1,0 +1,28 @@
+[project]
+name = "hn-reader"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Your Name",email = "you@example.com"}
+]
+readme = "README.md"
+requires-python = ">=3.10,<4.0"
+dependencies = [
+    "textual (>=8.2.8,<9.0.0)",
+    "httpx (>=0.28.1,<0.29.0)",
+]
+
+[tool.poetry]
+packages = [{include = "hn_reader"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+app = "hn_reader.cli:run"
+
+[dependency-groups]
+dev = [
+    "textual-dev (>=1.8.0,<2.0.0)"
+]
