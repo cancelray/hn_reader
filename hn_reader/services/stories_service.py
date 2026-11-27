@@ -17,11 +17,7 @@ class StoriesService(BaseStoriesService):
         feed: Feed,
         limit: int = 30,
         force: bool = False,
-        on_progress: dict[str, int] | None = None,
     ) -> AsyncGenerator[Story, None]:
-        feed_ids = await self.client.fetch_feed_ids(feed)
-        target_ids = feed_ids[:limit]
-
         cache_key = feed.endpoint
         story_resp_list: list[Story] = []
 
@@ -33,6 +29,9 @@ class StoriesService(BaseStoriesService):
                     yield story
 
             return
+
+        feed_ids = await self.client.fetch_feed_ids(feed)
+        target_ids = feed_ids[:limit]
 
         for id in target_ids:
             story_resp = await self.client.fetch_story(id)

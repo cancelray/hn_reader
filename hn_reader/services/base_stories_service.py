@@ -11,7 +11,6 @@ class BaseStoriesService(ABC):
         feed: Feed,
         limit: int = 30,
         force: bool = False,
-        on_progress: dict[str, int] | None = None,
     ) -> AsyncGenerator[Story, None]: ...
 
     @abstractmethod

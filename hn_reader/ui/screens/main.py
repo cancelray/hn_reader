@@ -1,10 +1,11 @@
+import os
 import re
 import webbrowser
 from pathlib import Path
 from typing import Any
 
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import Screen
@@ -12,6 +13,8 @@ from textual.widgets import (
     DataTable,
     Footer,
     Header,
+    Input,
+    Label,
     Markdown,
     Tab,
     Tabs,
@@ -19,9 +22,11 @@ from textual.widgets import (
 
 from hn_reader.config import Config
 from hn_reader.exceptions import HnException
-from hn_reader.models import Feed, Story
+from hn_reader.models import Comment, Feed, Story
 from hn_reader.services import BaseStoriesService
+from hn_reader.ui.screens.story_modal import StoryModal
 from hn_reader.ui.widgets import TableWidget
+from hn_reader.ui.widgets.input import InputWidget
 
 
 class MainScreen(Screen):
@@ -31,10 +36,12 @@ class MainScreen(Screen):
         self.config = config
         self.stories_service = stories_service
         self._stories: dict[int, Story] = {}
-        self._saved_stories_path = (
-            Path(__file__).resolve().parent.parent.parent.parent / 'saved-stories'
-        )
+        self._comments: list[Comment] = []
+        self._rows: list[Any] = []
+        self._base_dir: Path = Path(__file__).resolve().parent.parent.parent.parent
         self._current_row: list[Any] = []
+        self._load_progress: int = 0
+        self._total: int = 0
         super().__init__(*args, **kwargs)
 
     CSS_PATH = 'styles.tcss'
@@ -42,35 +49,85 @@ class MainScreen(Screen):
     BINDINGS = (
         ('r', 'reload', 'Обновить'),
         ('o', 'open', 'Открыть'),
-        ('←→', '', 'Вкладка'),
         ('s', 'save', 'Сохранить (только текст)'),
+        ('/', 'filter_focus', 'Фильтр'),
+        ('←→', '', 'Вкладка'),
         ('q', 'quit', 'Выход'),
     )
 
     def compose(self) -> ComposeResult:
+        self._total = self.config.load_limit
+
         yield Header()
         yield Tabs(Tab('Top', id='top'), Tab('New', id='new'), Tab('Best', id='best'))
+        yield InputWidget(
+            id='filter-input', placeholder='Для фильтрации историй нажмите /'
+        )
         with Horizontal(id='horizontal-content'):
             yield TableWidget(id='table-widget')
-            with VerticalScroll():
+            with VerticalScroll(id='vertical-scroll-markdown'):
                 yield Markdown('Выберите историю для загрузки', id='details')
+        yield Label('Ожидание загрузки', id='status-label')
         yield Footer()
+
+    def _filter_table(self, value: str) -> None:
+        table = self.query_one('#table', DataTable)
+        table.clear()
+
+        clear_value = value.strip().lower()
+
+        for row in self._rows:
+            if clear_value in str(row[1]).lower():
+                table.add_row(*row)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._filter_table(event.value)
 
     @work(exclusive=True)
     async def on_tab_switch_load(self, feed: Feed, force: bool = False) -> None:
         table = self.query_one('#table', DataTable)
         table.clear()
 
+        md_widget = self.query_one('#details', Markdown)
+        md_widget.update('Выберите историю для загрузки')
+
+        status_label = self.query_one('#status-label', Label)
+        status_label.update(f'Загружено 0/{self._total}')
+
+        table.add_row('...', 'Загрузка данных...', key='loader')
+
         try:
-            async for story in self.stories_service.load_feed(feed, force=force):
+            async for story in self.stories_service.load_feed(
+                feed, limit=self.config.load_limit, force=force
+            ):
                 self._stories[story.id] = story
                 crop_title = Text(story.title, no_wrap=True, overflow='ellipsis')
 
-                table.add_row(
-                    story.id, crop_title, story.score, story.comments_count, story.age
+                table.remove_row('loader')
+                key = table.add_row(
+                    story.id,
+                    crop_title,
+                    story.score,
+                    story.comments_count,
+                    story.age,
                 )
+
+                self._rows.append(table.get_row(key))
+
+                table.add_row('...', 'Загрузка данных', key='loader')
+
+                self._load_progress += 1
+                status_label.update(f'Загружено {self._load_progress}/{self._total}')
         except HnException as e:
             self.notify(e.message)
+            status_label.update('Ошибка загрузки')
+            self._load_progress = 0
+        else:
+            status_label.update('Загружено')
+            self._load_progress = 0
+        finally:
+            if 'loader' in table.rows:
+                table.remove_row('loader')
 
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_id = event.tab.id
@@ -106,24 +163,33 @@ class MainScreen(Screen):
                 url = f'URL: {story.url}'
                 content = url
 
-            comments = await self.stories_service.load_comments(
-                story, self.config.top_comments_load_limit
-            )
+            try:
+                comments = await self.stories_service.load_comments(
+                    story, self.config.top_comments_load_limit
+                )
 
-            comments_title = '-----Top comments-----'
-            comments_block = 'No comments yet'
+                comments_title = '-----Top comments-----'
+                comments_block = 'No comments yet'
 
-            if comments:
-                format_comments: list[str] = []
+                if comments:
+                    self._comments = comments
+                    format_comments: list[str] = []
 
-                for comment in comments:
-                    format_comments.append(f'{comment.author}: {comment.text}')
+                    for comment in comments:
+                        format_comments.append(f'{comment.author}: {comment.text}')
 
-                comments_block = '\\\n'.join(format_comments)
+                    comments_block = '\\\n'.join(format_comments)
 
-            details_widget.update(
-                f'{title}\n\n{author}\\\n{score}\\\n{comments_count}\\\n{posted}\\\n{content}\n\n{comments_title}\n\n{comments_block}'
-            )
+                details_widget.update(
+                    f'{title}\n\n{author}\\\n{score}\\\n{comments_count}\\\n{posted}\\\n{content}\n\n{comments_title}\n\n{comments_block}'
+                )
+
+                vertical_widget = self.query_one(
+                    '#vertical-scroll-markdown', VerticalScroll
+                )
+                vertical_widget.scroll_home(animate=False)
+            except HnException as e:
+                self.notify(e.message)
 
         details_widget.loading = False
 
@@ -144,7 +210,12 @@ class MainScreen(Screen):
             if target_url:
                 webbrowser.open(target_url)
             else:
-                self.notify('Текущая история не содержит ссылки')
+                story = self._stories[story_id]
+                count_of_top_comments = self.config.top_comments_load_limit
+
+                self.app.push_screen(
+                    StoryModal(story, self._comments, count_of_top_comments)
+                )
 
     def action_save(self) -> None:
         table = self.query_one('#table', DataTable)
@@ -159,16 +230,44 @@ class MainScreen(Screen):
                 return
 
             title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', story.title)
-            saved_story = self._saved_stories_path / f'{title}.txt'
+
+            if not (self._base_dir / 'saved-stories').is_dir():
+                os.makedirs(self._base_dir / 'saved-stories')
+
+            saved_story = self._base_dir / 'saved-stories' / f'{title}.txt'
 
             try:
                 with saved_story.open('w', encoding='utf-8') as f:
                     f.write(story.text)
+                    self.notify(
+                        f'История {story.title} сохранена в папке saved-stories',
+                    )
             except OSError:
                 self.notify(
-                    'Ошибка записи истории. Проверьте наличие папки saved-stories',
+                    'Ошибка записи истории. Попробуйте снова.',
                     severity='error',
                 )
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == 'escape':
+            md_widget = self.query_one('#details', Markdown)
+            md_widget.update('Выберите историю для загрузки')
+            event.stop()
+
+        if event.key == 'left' or event.key == 'right':
+            tab_widget = self.query_one(Tabs)
+
+            match event.key:
+                case 'left':
+                    tab_widget.action_previous_tab()
+                case 'right':
+                    tab_widget.action_next_tab()
+
+            event.stop()
+
+    def action_filter_focus(self) -> None:
+        filter_input = self.query_one('#filter-input', InputWidget)
+        filter_input.focus()
 
     def action_quit(self) -> None:
         self.app.exit()

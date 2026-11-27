@@ -58,11 +58,20 @@ class HttpxProvider(BaseProvider):
 
                     return feed_ids
                 except httpx.TimeoutException as e:
-                    raise HnTimeoutError('Timeout', None) from e
+                    raise HnTimeoutError(
+                        'Время ожидания истекло. Не удалось загрузить данные. Проверьте подключение к интернету и нажмите r для повторной загрузки.',
+                        None,
+                    ) from e
                 except httpx.NetworkError as e:
-                    raise HnNetworkError('Network Error', None) from e
+                    raise HnNetworkError(
+                        'Ошибка сети. Не удалось связаться с сервером. Проверьте подключение к интернету и нажмите r для повторной загрузки',
+                        None,
+                    ) from e
                 except httpx.HTTPStatusError as e:
-                    raise HnServerError('Server Error', e.response.status_code) from e
+                    raise HnServerError(
+                        'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
+                        e.response.status_code,
+                    ) from e
 
         return []
 
@@ -127,10 +136,19 @@ class HttpxProvider(BaseProvider):
 
                 return [comment for comment in comments if comment is not None]
             except httpx.TimeoutException as e:
-                raise HnTimeoutError('Timeout', None) from e
+                raise HnTimeoutError(
+                    'Время ожидания истекло. Не удалось загрузить данные. Проверьте подключение к интернету и нажмите r для повторной загрузки.',
+                    None,
+                ) from e
             except httpx.NetworkError as e:
-                raise HnNetworkError('Network Error', None) from e
+                raise HnNetworkError(
+                    'Ошибка сети. Не удалось связаться с сервером. Проверьте подключение к интернету и нажмите r для повторной загрузки',
+                    None,
+                ) from e
             except httpx.HTTPStatusError as e:
-                raise HnServerError('Server Error', e.response.status_code) from e
+                raise HnServerError(
+                    'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
+                    e.response.status_code,
+                ) from e
 
         return []

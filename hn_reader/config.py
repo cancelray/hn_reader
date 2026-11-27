@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     base_url: str
+    load_limit: int
     user_agent: str
     timeout: float
     connect: float
