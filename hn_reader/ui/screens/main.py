@@ -19,6 +19,7 @@ from textual.widgets import (
     Tab,
     Tabs,
 )
+from textual.widgets.data_table import CellDoesNotExist
 
 from hn_reader.config import Config
 from hn_reader.exceptions import HnException
@@ -84,15 +85,18 @@ class MainScreen(Screen):
         self._filter_table(event.value)
 
     @work(exclusive=True)
-    async def on_tab_switch_load(self, feed: Feed, force: bool = False) -> None:
+    async def load_feed_worker(self, feed: Feed, force: bool = False) -> None:
         table = self.query_one('#table', DataTable)
         table.clear()
 
         md_widget = self.query_one('#details', Markdown)
         md_widget.update('Выберите историю для загрузки')
 
+        self._load_progress = 0
+        self._rows = []
+
         status_label = self.query_one('#status-label', Label)
-        status_label.update(f'Загружено 0/{self._total}')
+        status_label.update(f'Загружено {self._load_progress}/{self._total}')
 
         table.add_row('...', 'Загрузка данных...', key='loader')
 
@@ -103,13 +107,16 @@ class MainScreen(Screen):
                 self._stories[story.id] = story
                 crop_title = Text(story.title, no_wrap=True, overflow='ellipsis')
 
-                table.remove_row('loader')
+                if 'loader' in table.rows:
+                    table.remove_row('loader')
+
                 key = table.add_row(
                     story.id,
                     crop_title,
                     story.score,
                     story.comments_count,
                     story.age,
+                    key=str(story.id),
                 )
 
                 self._rows.append(table.get_row(key))
@@ -132,13 +139,10 @@ class MainScreen(Screen):
     def on_tabs_tab_activated(self, event: Tabs.TabActivated) -> None:
         tab_id = event.tab.id
         current_tab = Feed(tab_id)
-        self.on_tab_switch_load(current_tab)
+        self.load_feed_worker(current_tab)
 
-    async def on_data_table_row_selected(
-        self, event: DataTable.RowLabelSelected
-    ) -> None:
+    async def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         table = self.query_one('#table', DataTable)
-
         row = table.get_row(event.row_key)
 
         if row == self._current_row:
@@ -152,58 +156,62 @@ class MainScreen(Screen):
         story_id = int(row[0])
         story = self._stories[story_id]
 
-        if story:
-            title = f'{story.title}'
-            author = f'Author: {story.author}'
-            score = f'Score: {story.score}'
-            comments_count = f'Comments: {story.comments_count}'
-            posted = f'Posted: {story.created_at:%Y-%m-%d}'
-            content = story.text
-            if story.url:
-                url = f'URL: {story.url}'
-                content = url
+        self._comments = []
 
-            try:
-                comments = await self.stories_service.load_comments(
-                    story, self.config.top_comments_load_limit
-                )
+        title = f'{story.title}'
+        author = f'Author: {story.author}'
+        score = f'Score: {story.score}'
+        comments_count = f'Comments: {story.comments_count}'
+        posted = f'Posted: {story.created_at:%Y-%m-%d}'
+        content = story.text
+        if story.url:
+            url = f'URL: {story.url}'
+            content = url
 
-                comments_title = '-----Top comments-----'
-                comments_block = 'No comments yet'
+        try:
+            comments = await self.stories_service.load_comments(
+                story, self.config.top_comments_load_limit
+            )
 
-                if comments:
-                    self._comments = comments
-                    format_comments: list[str] = []
+            comments_title = '-----Top comments-----'
+            comments_block = 'No comments yet'
 
-                    for comment in comments:
-                        format_comments.append(f'{comment.author}: {comment.text}')
+            if comments:
+                self._comments = comments.copy()
+                format_comments: list[str] = []
 
-                    comments_block = '\\\n'.join(format_comments)
+                for comment in comments:
+                    format_comments.append(f'{comment.author}: {comment.text}')
 
-                details_widget.update(
-                    f'{title}\n\n{author}\\\n{score}\\\n{comments_count}\\\n{posted}\\\n{content}\n\n{comments_title}\n\n{comments_block}'
-                )
+                comments_block = '\\\n'.join(format_comments)
 
-                vertical_widget = self.query_one(
-                    '#vertical-scroll-markdown', VerticalScroll
-                )
-                vertical_widget.scroll_home(animate=False)
-            except HnException as e:
-                self.notify(e.message)
+            details_widget.update(
+                f'{title}\n\n{author}\\\n{score}\\\n{comments_count}\\\n{posted}\\\n{content}\n\n{comments_title}\n\n{comments_block}'
+            )
+
+            vertical_widget = self.query_one(
+                '#vertical-scroll-markdown', VerticalScroll
+            )
+            vertical_widget.scroll_home(animate=False)
+        except HnException as e:
+            self.notify(e.message)
 
         details_widget.loading = False
 
     def action_reload(self) -> None:
         tab_id = self.query_one(Tabs).active
         current_tab = Feed(tab_id)
-        self.on_tab_switch_load(current_tab, force=True)
+        self.load_feed_worker(current_tab, force=True)
 
     def action_open(self) -> None:
         table = self.query_one('#table', DataTable)
-        table_row = table.get_row_at(table.cursor_row)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except CellDoesNotExist:
+            return
 
-        if table_row:
-            story_id = int(table_row[0])
+        if row_key.value and row_key.value.isdigit():
+            story_id = int(row_key.value)
 
             target_url = self._stories[story_id].url
 
@@ -219,10 +227,13 @@ class MainScreen(Screen):
 
     def action_save(self) -> None:
         table = self.query_one('#table', DataTable)
-        table_row = table.get_row_at(table.cursor_row)
+        try:
+            row_key, _ = table.coordinate_to_cell_key(table.cursor_coordinate)
+        except CellDoesNotExist:
+            return
 
-        if table_row:
-            story_id = int(table_row[0])
+        if row_key.value and row_key.value.isdigit():
+            story_id = int(row_key.value)
             story = self._stories[story_id]
 
             if not story.text:
@@ -231,12 +242,12 @@ class MainScreen(Screen):
 
             title = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '', story.title)
 
-            if not (self._base_dir / 'saved-stories').is_dir():
-                os.makedirs(self._base_dir / 'saved-stories')
-
-            saved_story = self._base_dir / 'saved-stories' / f'{title}.txt'
-
             try:
+                if not (self._base_dir / 'saved-stories').is_dir():
+                    os.makedirs(self._base_dir / 'saved-stories')
+
+                saved_story = self._base_dir / 'saved-stories' / f'{title}.txt'
+
                 with saved_story.open('w', encoding='utf-8') as f:
                     f.write(story.text)
                     self.notify(

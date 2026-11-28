@@ -6,9 +6,6 @@ from hn_reader.models import Comment, Feed, Story
 
 class BaseProvider(ABC):
     @abstractmethod
-    def open_client(self) -> None: ...
-
-    @abstractmethod
     async def close_client(self) -> None: ...
 
     @abstractmethod

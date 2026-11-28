@@ -1,10 +1,18 @@
 import asyncio
 from collections.abc import Sequence
+from json import JSONDecodeError
 
 import httpx
 
 from hn_reader import Config
-from hn_reader.exceptions import HnNetworkError, HnServerError, HnTimeoutError
+from hn_reader.exceptions import (
+    HnException,
+    HnJSONError,
+    HnNetworkError,
+    HnRemoteProtocolError,
+    HnServerError,
+    HnTimeoutError,
+)
 from hn_reader.models import Comment, Feed, Story
 
 from .base_provider import BaseProvider
@@ -13,27 +21,18 @@ from .base_provider import BaseProvider
 class HttpxProvider(BaseProvider):
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.client: httpx.AsyncClient | None = None
         self._timeout_retries = self.config.timeout_retries.copy()
         self._max_attempts = len(self._timeout_retries) + 1
-
-    def open_client(self) -> None:
-        timeout = httpx.Timeout(
-            timeout=self.config.timeout, connect=self.config.connect
-        )
-
-        limits = httpx.Limits(max_connections=self.config.max_connection)
-
-        headers = {
-            'User-Agent': self.config.user_agent,
-            'Accept': 'application/json',
-        }
-
         self.client = httpx.AsyncClient(
             base_url=self.config.base_url,
-            timeout=timeout,
-            limits=limits,
-            headers=headers,
+            timeout=httpx.Timeout(
+                timeout=self.config.timeout, connect=self.config.connect
+            ),
+            limits=httpx.Limits(max_connections=self.config.max_connection),
+            headers={
+                'User-Agent': self.config.user_agent,
+                'Accept': 'application/json',
+            },
         )
 
     async def close_client(self) -> None:
@@ -53,7 +52,15 @@ class HttpxProvider(BaseProvider):
                         continue
 
                     response.raise_for_status()
-                    data = response.json()
+
+                    try:
+                        data = response.json()
+                    except JSONDecodeError as e:
+                        raise HnJSONError(
+                            'Не удалось загрузить данные. Попробуйте обновить страницу или повторить попытку позже',
+                            None,
+                        ) from e
+
                     feed_ids = [int(item) for item in data]
 
                     return feed_ids
@@ -72,42 +79,68 @@ class HttpxProvider(BaseProvider):
                         'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
                         e.response.status_code,
                     ) from e
+                except httpx.RemoteProtocolError as e:
+                    raise HnRemoteProtocolError(
+                        'Не удалось получить ответ от сервера. Попробуйте повторить запрос чуть позже',
+                        None,
+                    ) from e
+                except httpx.HTTPError as e:
+                    raise HnException(
+                        'Произошла ошибка, попробуйте повторить запрос позже', None
+                    ) from e
 
         return []
 
     async def fetch_story(self, story_id: int) -> Story | None:
         if self.client:
-            async with asyncio.Semaphore(10):
-                for attempt in range(self._max_attempts):
+            for attempt in range(self._max_attempts):
+                try:
+                    response = await self.client.get(f'/item/{story_id}.json')
+
+                    if response.status_code >= 500 and attempt < len(
+                        self._timeout_retries
+                    ):
+                        await asyncio.sleep(self._timeout_retries[attempt])
+                        continue
+
+                    response.raise_for_status()
+
                     try:
-                        response = await self.client.get(f'/item/{story_id}.json')
-
-                        if response.status_code >= 500 and attempt < len(
-                            self._timeout_retries
-                        ):
-                            await asyncio.sleep(self._timeout_retries[attempt])
-                            continue
-
-                        response.raise_for_status()
                         data = response.json()
+                    except JSONDecodeError as e:
+                        raise HnJSONError(
+                            'Не удалось загрузить данные. Попробуйте обновить страницу или повторить попытку позже',
+                            None,
+                        ) from e
 
-                        if data:
-                            return Story.from_api(data)
-                    except httpx.TimeoutException as e:
-                        raise HnTimeoutError(
-                            'Время ожидания истекло. Не удалось загрузить данные. Проверьте подключение к интернету и нажмите r для повторной загрузки.',
-                            None,
-                        ) from e
-                    except httpx.NetworkError as e:
-                        raise HnNetworkError(
-                            'Ошибка сети. Не удалось связаться с сервером. Проверьте подключение к интернету и нажмите r для повторной загрузки',
-                            None,
-                        ) from e
-                    except httpx.HTTPStatusError as e:
-                        raise HnServerError(
-                            'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
-                            e.response.status_code,
-                        ) from e
+                    if data:
+                        return Story.from_api(data)
+                    else:
+                        return None
+                except httpx.TimeoutException as e:
+                    raise HnTimeoutError(
+                        'Время ожидания истекло. Не удалось загрузить данные. Проверьте подключение к интернету и нажмите r для повторной загрузки.',
+                        None,
+                    ) from e
+                except httpx.NetworkError as e:
+                    raise HnNetworkError(
+                        'Ошибка сети. Не удалось связаться с сервером. Проверьте подключение к интернету и нажмите r для повторной загрузки',
+                        None,
+                    ) from e
+                except httpx.HTTPStatusError as e:
+                    raise HnServerError(
+                        'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
+                        e.response.status_code,
+                    ) from e
+                except httpx.RemoteProtocolError as e:
+                    raise HnRemoteProtocolError(
+                        'Не удалось получить ответ от сервера. Попробуйте повторить запрос чуть позже',
+                        None,
+                    ) from e
+                except httpx.HTTPError as e:
+                    raise HnException(
+                        'Произошла ошибка, попробуйте повторить запрос позже', None
+                    ) from e
 
     async def _fetch_comment(
         self, id: int, client: httpx.AsyncClient
@@ -120,7 +153,14 @@ class HttpxProvider(BaseProvider):
                 continue
 
             response.raise_for_status()
-            data = response.json()
+
+            try:
+                data = response.json()
+            except JSONDecodeError as e:
+                raise HnJSONError(
+                    'Не удалось загрузить данные. Попробуйте обновить страницу или повторить попытку позже',
+                    None,
+                ) from e
 
             if data:
                 return Comment.from_api(data)
@@ -150,5 +190,13 @@ class HttpxProvider(BaseProvider):
                     'Не удалось загрузить данные. Нажмите r для повторной загрузки или повторить попытку позже',
                     e.response.status_code,
                 ) from e
-
+            except httpx.RemoteProtocolError as e:
+                raise HnRemoteProtocolError(
+                    'Не удалось получить ответ от сервера. Попробуйте повторить запрос чуть позже',
+                    None,
+                ) from e
+            except httpx.HTTPError as e:
+                raise HnException(
+                    'Произошла ошибка, попробуйте повторить запрос позже', None
+                ) from e
         return []

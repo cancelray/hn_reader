@@ -22,7 +22,6 @@ class HnApp(App):
         super().__init__(*args, **kwargs)
 
     def on_mount(self) -> None:
-        self.httpx_provider.open_client()
         main_screen = MainScreen(self.config, self.stories_service)
         self.push_screen(main_screen)
 

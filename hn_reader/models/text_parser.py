@@ -20,7 +20,7 @@ class TextParser(HTMLParser):
         elif tag == 'a':
             href = dict(attrs).get('href')
             if href:
-                self._text_parts.append(unescape(href))
+                self._text_parts.append(href)
                 self._in_link = True
 
     def handle_endtag(self, tag: str) -> None:
@@ -32,6 +32,6 @@ class TextParser(HTMLParser):
             self._text_parts.append(data)
 
     def get_text(self) -> str:
-        text = unescape(''.join(self._text_parts))
+        text = unescape('\n'.join(self._text_parts))
         lines = [line.strip() for line in text.splitlines()]
         return ''.join(lines).strip()

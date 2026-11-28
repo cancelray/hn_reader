@@ -2,9 +2,6 @@ from dataclasses import dataclass
 
 from hn_reader.models.text_parser import TextParser
 
-# from html import unescape
-# from html.parser import HTMLParser
-
 
 @dataclass(frozen=True, slots=True)
 class Comment:

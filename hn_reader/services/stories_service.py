@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import AsyncGenerator
 
@@ -11,6 +12,11 @@ class StoriesService(BaseStoriesService):
     def __init__(self, client: BaseProvider) -> None:
         self.client = client
         self._cache: dict[str, tuple[list[Story], float]] = {}
+        self._semaphore = asyncio.Semaphore(10)
+
+    async def _limited_fetch(self, id: int) -> Story | None:
+        async with self._semaphore:
+            return await self.client.fetch_story(id)
 
     async def load_feed(
         self,
@@ -21,27 +27,34 @@ class StoriesService(BaseStoriesService):
         cache_key = feed.endpoint
         story_resp_list: list[Story] = []
 
-        if cache_key in self._cache and force == False:
+        if cache_key in self._cache and not force:
             data, cache_time_limit = self._cache[cache_key]
 
             if time.monotonic() < cache_time_limit:
                 for story in data:
                     yield story
 
-            return
+                return
 
         feed_ids = await self.client.fetch_feed_ids(feed)
         target_ids = feed_ids[:limit]
 
-        for id in target_ids:
-            story_resp = await self.client.fetch_story(id)
+        tasks = [asyncio.create_task(self._limited_fetch(id)) for id in target_ids]
 
-            if story_resp:
-                cache_time_limit = time.monotonic() + 60
-                story_resp_list.append(story_resp)
-                self._cache[cache_key] = story_resp_list, cache_time_limit
+        try:
+            for task in tasks:
+                story = await task
 
-                yield story_resp
+                if story:
+                    cache_time_limit = time.monotonic() + 60
+                    story_resp_list.append(story)
+                    self._cache[cache_key] = story_resp_list, cache_time_limit
+
+                    yield story
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
 
     async def load_comments(self, story: Story, limit: int) -> list[Comment]:
         comments_ids = story.kids

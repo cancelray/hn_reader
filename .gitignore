@@ -1,6 +1,6 @@
 /.venv
 /build
-*.txt
+/saved-stories
 /__pycache__
 *.pyc
 /.vscode

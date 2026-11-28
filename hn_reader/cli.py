@@ -3,7 +3,6 @@ import argparse
 from hn_reader import Config
 from hn_reader.api import HttpxProvider
 from hn_reader.api.base_provider import BaseProvider
-from hn_reader.api.demo import start_demo_server_in_background
 from hn_reader.services import BaseStoriesService, StoriesService
 from hn_reader.ui import HnApp
 
@@ -15,12 +14,14 @@ def create_app() -> HnApp:
     args = parser.parse_args()
 
     if args.demo:
+        from hn_reader.api.demo import start_demo_server_in_background
+
         base_url = 'http://127.0.0.1:8000/v0/'
         start_demo_server_in_background()
     else:
         base_url = 'https://hacker-news.firebaseio.com/v0/'
 
-    if args.limit:
+    if 0 < args.limit < 101:
         load_limit = args.limit
     else:
         load_limit = 30
@@ -42,6 +43,6 @@ def create_app() -> HnApp:
     return HnApp(config, stories_service, httpx_provider)
 
 
-def run():
+def run() -> None:
     app = create_app()
     app.run()

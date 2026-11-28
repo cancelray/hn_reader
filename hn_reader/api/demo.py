@@ -93,7 +93,7 @@ best_ids: list[int] = []
 
 
 def text_in_story() -> str:
-    rand = random.random()
+    rand = rng.random()
     if rand < 0.3:
         return rng.choice(TEXT)
 
@@ -133,7 +133,7 @@ for i, title in enumerate(TITLES):
             'kids': [],
             'descendants': comment_count,
         }
-        
+
     items[story_id] = story
 
     comment_ids = [story_id + 1000 + j * 100 for j in range(comment_count)]
